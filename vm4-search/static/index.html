@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VM4 Search</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; max-width: 760px; margin: 8vh auto; padding: 0 20px; color: #17212f; }
+    form { display: flex; gap: 8px; }
+    input { flex: 1; padding: 12px; font: inherit; border: 1px solid #aab4c0; border-radius: 6px; }
+    button { padding: 12px 20px; font: inherit; color: white; background: #1956a3; border: 0; border-radius: 6px; cursor: pointer; }
+    article { border-bottom: 1px solid #ddd; padding: 16px 0; }
+    article a { font-size: 1.2rem; }
+    .meta { color: #536273; font-size: .9rem; overflow-wrap: anywhere; }
+    #message { min-height: 1.5em; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <h1>Distributed Search</h1>
+  <form id="search-form"><input id="query" type="search" placeholder="Search documents" required aria-label="Search documents"><button type="submit">Search</button></form>
+  <p id="message" role="status"></p><section id="results" aria-label="Search results"></section>
+  <script>
+    const form = document.querySelector('#search-form');
+    const message = document.querySelector('#message');
+    const results = document.querySelector('#results');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      results.replaceChildren();
+      message.textContent = 'Searching…';
+      try {
+        const response = await fetch('/search?q=' + encodeURIComponent(document.querySelector('#query').value));
+        if (!response.ok) throw new Error((await response.json()).detail || 'Search failed');
+        const data = await response.json();
+        message.textContent = data.results.length ? `${data.results.length} result(s)` : 'No results found.';
+        for (const item of data.results) {
+          const article = document.createElement('article');
+          const link = document.createElement('a');
+          link.href = item.url;
+          link.textContent = item.title;
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = `${item.url} · ID: ${item.doc_id} · Score: ${item.score.toFixed(4)}`;
+          article.append(link, meta);
+          results.append(article);
+        }
+      } catch (error) {
+        message.textContent = `Error: ${error.message}`;
+      }
+    });
+  </script>
+</body>
+</html>
