@@ -30,10 +30,15 @@ def generate(root: Path = Path(__file__).parent / "serving", version: str = "v0"
         docs.append({"doc_id": doc_id, "title": title, "url": url, "doc_length": sum(counts.values())})
         entries.extend({"term": term, "doc_id": doc_id, "tf": count} for term, count in sorted(counts.items()))
         ranks.append({"doc_id": doc_id, "pagerank": [0.32, 0.23, 0.19, 0.16, 0.10][i]})
-    pq.write_table(pa.Table.from_pylist(docs), folder / "documents.parquet")
-    pq.write_table(pa.Table.from_pylist(entries), folder / "index.parquet")
-    pq.write_table(pa.Table.from_pylist(ranks), folder / "pagerank.parquet")
+    for name, rows in (("documents", docs), ("index", entries), ("pagerank", ranks)):
+        dataset = folder / f"{name}.parquet"
+        dataset.mkdir(exist_ok=True)
+        table = pa.Table.from_pylist(rows)
+        midpoint = max(1, len(rows) // 2)
+        for part, start in enumerate(range(0, len(rows), midpoint)):
+            pq.write_table(table.slice(start, midpoint), dataset / f"part-{part:05d}.parquet")
     (folder / "manifest.json").write_text(json.dumps({"version": version, "doc_count": len(docs), "status": "ready"}, indent=2), encoding="utf-8")
+    (folder / "_READY").touch()
     print(f"Generated {folder}")
 
 

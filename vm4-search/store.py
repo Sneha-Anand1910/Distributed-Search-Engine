@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import argparse
 from pathlib import Path
 
 import pyarrow as pa
@@ -33,8 +34,10 @@ class SearchStore:
             raise InvalidExport("Version must be v0 or v1")
         folder = self.root / version
         try:
+            if not (folder / "_READY").is_file():
+                raise InvalidExport("Missing _READY marker")
             manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-            if manifest != {"version": version, "doc_count": manifest.get("doc_count"), "status": "ready"}:
+            if manifest.get("version") != version or manifest.get("status") != "ready" or "doc_count" not in manifest:
                 raise InvalidExport("Manifest must contain version, doc_count and status=ready")
             tables = {}
             for name, columns in {
@@ -42,14 +45,17 @@ class SearchStore:
                 "index": ["term", "doc_id", "tf"],
                 "pagerank": ["doc_id", "pagerank"],
             }.items():
-                table = pq.read_table(folder / f"{name}.parquet")
-                if table.column_names != columns:
+                dataset = folder / f"{name}.parquet"
+                if not dataset.is_dir() or not list(dataset.glob("part-*.parquet")):
+                    raise InvalidExport(f"Missing {name} Parquet parts")
+                table = pq.read_table(dataset)
+                if not set(columns).issubset(table.column_names):
                     raise InvalidExport(f"Invalid {name} columns")
                 tables[name] = table.to_pylist()
             docs = {}
             for row in tables["documents"]:
                 doc_id = row["doc_id"]
-                if not isinstance(doc_id, str) or not doc_id or doc_id in docs or not isinstance(row["title"], str) or not isinstance(row["url"], str) or not isinstance(row["doc_length"], int) or row["doc_length"] <= 0:
+                if not isinstance(doc_id, (str, int)) or isinstance(doc_id, bool) or doc_id == "" or doc_id in docs or not isinstance(row["title"], str) or not isinstance(row["url"], str) or not isinstance(row["doc_length"], int) or row["doc_length"] <= 0:
                     raise InvalidExport("Invalid or duplicate document")
                 docs[doc_id] = row
             if not isinstance(manifest["doc_count"], int) or manifest["doc_count"] != len(docs):
@@ -57,7 +63,7 @@ class SearchStore:
             index = {}
             for row in tables["index"]:
                 term, doc_id, tf = row["term"], row["doc_id"], row["tf"]
-                if not isinstance(term, str) or not term or term != term.lower() or doc_id not in docs or not isinstance(tf, int) or tf <= 0 or tf > docs[doc_id]["doc_length"]:
+                if not isinstance(term, str) or not re.fullmatch(r"[a-z0-9]+", term) or doc_id not in docs or not isinstance(tf, int) or tf <= 0 or tf > docs[doc_id]["doc_length"]:
                     raise InvalidExport("Invalid index entry")
                 postings = index.setdefault(term, {})
                 if doc_id in postings:
@@ -86,3 +92,14 @@ class SearchStore:
             os.replace(temporary, self.active_file)
         self.documents, self.index, self.pagerank = docs, index, pr
         self.version = version
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Validate a VM3 export without activating it")
+    parser.add_argument("version", choices=("v0", "v1"))
+    parser.add_argument("--root", type=Path, default=Path(__file__).parent / "serving")
+    args = parser.parse_args()
+    validator = SearchStore.__new__(SearchStore)
+    validator.root = args.root
+    docs, _, _ = validator.load(args.version)
+    print(f"Valid {args.version} export: {len(docs)} documents")
